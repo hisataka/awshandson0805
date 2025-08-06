@@ -6,6 +6,7 @@ import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import * as codepipeline_actions from 'aws-cdk-lib/aws-codepipeline-actions';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 
 interface ConsumerProps extends StackProps {
   ecrRepository: ecr.Repository,
@@ -37,7 +38,9 @@ export class PipelineCdkStack extends Stack {
     });
 
         const dockerBuild = new codebuild.PipelineProject(this, 'DockerBuild', {
-      environmentVariables: {
+
+
+        environmentVariables: {
         IMAGE_TAG: { value: 'latest' },
         IMAGE_REPO_URI: { value: props.ecrRepository.repositoryUri },
         AWS_DEFAULT_REGION: { value: process.env.CDK_DEFAULT_REGION },
@@ -71,6 +74,30 @@ export class PipelineCdkStack extends Stack {
 
     dockerBuild.addToRolePolicy(dockerBuildRolePolicy);
 
+    const signerARNParameter = new ssm.StringParameter(this, 'SignerARNParam', {
+      parameterName: 'signer-profile-arn',
+      stringValue: 'arn:aws:signer:ap-northeast-1:354366286107:/signing-profiles/ecr_signing_profile',
+    });
+
+    const signerParameterPolicy = new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      resources: [signerARNParameter.parameterArn],
+      actions: ['ssm:GetParametersByPath', 'ssm:GetParameters'],
+    });
+
+    const signerPolicy = new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      resources: ['*'],
+      actions: [
+        'signer:PutSigningProfile',
+        'signer:SignPayload',
+        'signer:GetRevocationStatus',
+      ],
+    });
+
+    dockerBuild.addToRolePolicy(signerParameterPolicy);    
+    dockerBuild.addToRolePolicy(signerPolicy);
+    
     const sourceOutput = new codepipeline.Artifact();
     const unitTestOutput = new codepipeline.Artifact();
         const dockerBuildOutput = new codepipeline.Artifact();
@@ -112,7 +139,7 @@ export class PipelineCdkStack extends Stack {
         }),
       ],
     });
-    
+
     new CfnOutput(this, 'SourceConnectionArn', {
         value: SourceConnection.attrConnectionArn,
       });
